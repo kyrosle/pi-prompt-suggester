@@ -1,7 +1,7 @@
 import type { PromptSuggesterConfig } from "../../config/types.js";
 import type { SeedArtifact } from "../../domain/seed.js";
 import type { SuggestionMetadata, SuggestionResult, SuggestionUsage, TurnContext } from "../../domain/suggestion.js";
-import type { ModelInvocationSettings } from "../ports/model-client.js";
+import { type ModelInvocationSettings, ModelRequestError } from "../ports/model-client.js";
 import type { SteeringSlice } from "../../domain/steering.js";
 import type { ModelClient } from "../ports/model-client.js";
 import type { PromptContextBuilder } from "./prompt-context-builder.js";
@@ -128,6 +128,7 @@ export class SuggestionEngine {
 					},
 				};
 			} catch (error) {
+				if (error instanceof ModelRequestError) throw error;
 				return await this.generateCompactSuggestion(turn, seed, steering, settings, config, {
 					requestedStrategy,
 					fallbackReason: `transcript_error:${(error as Error).message}`,

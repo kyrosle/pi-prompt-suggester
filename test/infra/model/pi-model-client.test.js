@@ -1,41 +1,33 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { PiModelClient } from "../../../dist/infra/model/pi-model-client.js";
-import { registerApiProvider, unregisterApiProviders } from "../../../node_modules/@earendil-works/pi-ai/dist/api-registry.js";
 
-const CLAUDE_BRIDGE_STREAM_SIMPLE_KEY = Symbol.for("claude-bridge:activeStreamSimple");
+const activeModel = { api: "openai-completions", provider: "openai", id: "model-1" };
+const seedInput = { reseedTrigger: { reason: "manual", changedFiles: [] }, previousSeed: null };
 
-function createClient() {
-	return new PiModelClient({
-		getContext() {
-			return undefined;
-		},
-	});
-}
-
-function createRuntimeWithModel(model, overrides = {}) {
-	const notify = overrides.notify ?? (() => {});
-	return {
+function createClient(responses, { models = [activeModel], logger } = {}) {
+	const calls = [];
+	const client = new PiModelClient({
 		getContext() {
 			return {
-				model,
+				model: activeModel,
+				sessionManager: { getSessionId: () => "pi-session" },
 				modelRegistry: {
-					getAll() {
-						return [model];
-					},
-					async getApiKeyAndHeaders(requestedModel) {
-						assert.equal(requestedModel, model);
-						return { ok: true };
+					getAll: () => models,
+					streamSimple(model, context, options) {
+						const response = responses[calls.length];
+						assert.ok(response, "Unexpected model request");
+						calls.push({ model, context, options });
+						return { result: async () => response };
 					},
 				},
-				hasUI: overrides.hasUI ?? false,
-				ui: { notify },
 			};
 		},
-	};
+	}, logger);
+	return { client, calls };
 }
 
-function createSuggestionContext() {
+function suggestionContext() {
 	return {
 		latestAssistantTurn: "I can do that.",
 		turnStatus: "success",
@@ -51,240 +43,141 @@ function createSuggestionContext() {
 	};
 }
 
-function registerTestProvider(response) {
-	const api = `test-api-${Math.random().toString(36).slice(2)}`;
-	const sourceId = `test-provider-${Math.random().toString(36).slice(2)}`;
-	registerApiProvider(
-		{
-			api,
-			stream() {
-				throw new Error("stream should not be used in these tests");
-			},
-			streamSimple() {
-				return {
-					async result() {
-						return response;
-					},
-				};
-			},
-		},
-		sourceId,
-	);
+function reply(text) {
 	return {
-		sourceId,
-		model: {
-			api,
-			provider: "test",
-			id: "model-1",
-			name: "model-1",
-			baseUrl: "http://localhost",
-			reasoning: false,
-			input: ["text"],
-			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-			contextWindow: 1000,
-			maxTokens: 1000,
-		},
-		unregister() {
-			unregisterApiProviders(sourceId);
-		},
+		stopReason: "stop",
+		content: [{ type: "text", text }],
+		usage: { input: 2, output: 3, cacheRead: 4, cacheWrite: 5, totalTokens: 14, cost: { total: 0.01 } },
 	};
 }
 
-const model = { provider: "openai", id: "gpt-5" };
+test("PiModelClient uses the session registry for the configured provider and reasoning", async () => {
+	const configured = { api: "test-extension-api", provider: "extension-provider", id: "model-1" };
+	const { client, calls } = createClient([reply("Run the tests.")], { models: [activeModel, configured] });
 
-test("PiModelClient resolves auth via getApiKeyAndHeaders when available", async () => {
-	const client = createClient();
-	const auth = await client.resolveRequestAuth(model, {
-		async getApiKeyAndHeaders(requestedModel) {
-			assert.equal(requestedModel, model);
-			return {
-				ok: true,
-				apiKey: "token-123",
-				headers: { "x-test": "1" },
-			};
-		},
-		async getApiKey() {
-			throw new Error("fallback should not be used");
-		},
+	const result = await client.generateSuggestion(suggestionContext(), {
+		modelRef: "extension-provider/model-1",
+		thinkingLevel: "low",
 	});
 
-	assert.deepEqual(auth, {
-		apiKey: "token-123",
-		headers: { "x-test": "1" },
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0].model, configured);
+	assert.equal(calls[0].options.reasoning, "low");
+	assert.equal(calls[0].context.messages[0].role, "user");
+	assert.match(calls[0].context.messages[0].content[0].text, /Fix the tests/);
+	assert.deepEqual(result, {
+		text: "Run the tests.",
+		usage: {
+			inputTokens: 2,
+			outputTokens: 3,
+			cacheReadTokens: 4,
+			cacheWriteTokens: 5,
+			totalTokens: 14,
+			costTotal: 0.01,
+		},
 	});
 });
 
-test("PiModelClient accepts header-only auth results from getApiKeyAndHeaders", async () => {
-	const client = createClient();
-	const auth = await client.resolveRequestAuth(model, {
-		async getApiKeyAndHeaders() {
-			return {
-				ok: true,
-				headers: { Authorization: "Bearer delegated" },
-			};
-		},
-	});
-
-	assert.deepEqual(auth, {
-		apiKey: undefined,
-		headers: { Authorization: "Bearer delegated" },
-	});
-});
-
-test("PiModelClient falls back to getApiKey for older ModelRegistry versions", async () => {
-	const client = createClient();
-	const auth = await client.resolveRequestAuth(model, {
-		async getApiKey(requestedModel) {
-			assert.equal(requestedModel, model);
-			return "legacy-token";
-		},
-	});
-
-	assert.deepEqual(auth, {
-		apiKey: "legacy-token",
-	});
-});
-
-test("PiModelClient surfaces ModelRegistry auth errors", async () => {
-	const client = createClient();
-	await assert.rejects(
-		() => client.resolveRequestAuth(model, {
-			async getApiKeyAndHeaders() {
-				return { ok: false, error: "missing auth" };
+test("PiModelClient keeps separate stable session IDs for seed and compact suggestion requests", async () => {
+	const seedReply = reply(JSON.stringify({
+		type: "final",
+		seed: {
+			projectIntentSummary: "Keep tests reliable.",
+			objectivesSummary: "Cover the model client.",
+			constraintsSummary: "Use no network.",
+			principlesGuidelinesSummary: "Use deterministic fixtures.",
+			implementationStatusSummary: "The client has regression tests.",
+			keyFiles: [{ path: "README.md" }],
+			categoryFindings: {
+				vision: { found: false, rationale: "No separate vision file." },
+				architecture: { found: false, rationale: "No separate architecture file." },
+				principles_guidelines: { found: false, rationale: "No separate guidelines file." },
 			},
-		}),
-		/missing auth/,
-	);
-});
-
-test("PiModelClient allows empty text for suggestions", async (t) => {
-	const provider = registerTestProvider({
-		content: [{ type: "text", text: "   " }],
-		usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } },
-	});
-	t.after(() => provider.unregister());
-	const client = new PiModelClient(createRuntimeWithModel(provider.model));
-
-	const result = await client.generateSuggestion(createSuggestionContext());
-
-	assert.equal(result.text, "");
-	assert.equal(typeof result.usage?.totalTokens, "number");
-});
-
-test("PiModelClient uses claude-bridge global shim when local provider registry cannot resolve it", async (t) => {
-	const bridgeModel = {
-		api: "claude-bridge",
-		provider: "claude-bridge",
-		id: "opus",
-		name: "opus",
-		baseUrl: "claude-bridge",
-		reasoning: true,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 1000,
-		maxTokens: 1000,
-	};
-	globalThis[CLAUDE_BRIDGE_STREAM_SIMPLE_KEY] = () => ({
-		async result() {
-			return {
-				content: [{ type: "text", text: "Use the test shim." }],
-				usage: { input: 2, output: 3, cacheRead: 0, cacheWrite: 0, totalTokens: 5, cost: { total: 0 } },
-			};
 		},
-	});
-	t.after(() => {
-		globalThis[CLAUDE_BRIDGE_STREAM_SIMPLE_KEY] = undefined;
-	});
-	const client = new PiModelClient(createRuntimeWithModel(bridgeModel));
+	}));
+	const { client, calls } = createClient([reply("Run the tests."), seedReply, reply("Review the output."), seedReply]);
 
-	const result = await client.generateSuggestion(createSuggestionContext());
+	await client.generateSuggestion(suggestionContext());
+	await client.generateSeed(seedInput);
+	await client.generateSuggestion(suggestionContext());
+	await client.generateSeed(seedInput);
 
-	assert.equal(result.text, "Use the test shim.");
-	assert.equal(result.usage?.totalTokens, 5);
+	assert.equal(calls.length, 4);
+	assert.ok(calls.every(({ model }) => model === activeModel));
+	const [suggestionId, seedId, nextSuggestionId, nextSeedId] = calls.map(({ options }) => options.sessionId);
+	assert.ok(suggestionId);
+	assert.ok(seedId);
+	assert.notEqual(suggestionId, "pi-session");
+	assert.notEqual(seedId, "pi-session");
+	assert.notEqual(suggestionId, seedId);
+	assert.equal(nextSuggestionId, suggestionId);
+	assert.equal(nextSeedId, seedId);
 });
 
-test("PiModelClient degrades unsupported providers to empty suggestions and warns once", async () => {
-	const unsupportedModel = {
-		api: "custom-bridge",
-		provider: "custom",
-		id: "model-1",
-		name: "model-1",
-		baseUrl: "custom-bridge",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 1000,
-		maxTokens: 1000,
-	};
-	const warnings = [];
-	const notifications = [];
-	const client = new PiModelClient(
-		createRuntimeWithModel(unsupportedModel, {
-			hasUI: true,
-			notify(message, level) {
-				notifications.push({ message, level });
-			},
-		}),
-		{
+test("PiModelClient preserves the transcript session ID and messages", async () => {
+	const { client, calls } = createClient([reply("Review the result.")]);
+	const original = { role: "user", content: "Run the tests", timestamp: 1 };
+
+	await client.generateSuggestion({
+		...suggestionContext(),
+		systemPrompt: "Original system prompt.",
+		sessionId: "transcript-session",
+		transcriptMessages: [original],
+		transcriptMessageCount: 1,
+	});
+
+	assert.equal(calls.length, 1);
+	assert.equal(calls[0].options.sessionId, "transcript-session");
+	assert.equal(calls[0].context.systemPrompt, "Original system prompt.");
+	assert.equal(calls[0].context.messages[0], original);
+	assert.equal(calls[0].context.messages.length, 2);
+});
+
+test("PiModelClient rejects provider errors instead of returning an empty suggestion or seed", async () => {
+	const failed = { stopReason: "error", errorMessage: "400 MissingSessionID", content: [] };
+	const model = { api: "openai-completions", provider: "opencode-go", id: "deepseek-v4.1-flash" };
+	const settings = { modelRef: "opencode-go/deepseek-v4.1-flash" };
+	const errors = [];
+	const { client, calls } = createClient([failed, failed], {
+		models: [activeModel, model],
+		logger: {
 			debug() {},
 			info() {},
-			warn(message, meta) {
-				warnings.push({ message, meta });
+			warn() {},
+			error(event, fields) {
+				errors.push({ event, ...fields });
 			},
-			error() {},
 		},
-	);
-
-	const first = await client.generateSuggestion(createSuggestionContext());
-	const second = await client.generateSuggestion(createSuggestionContext());
-
-	assert.equal(first.text, "");
-	assert.equal(second.text, "");
-	assert.equal(warnings.length, 1);
-	assert.equal(warnings[0].message, "suggestion.provider.incompatible");
-	assert.equal(notifications.length, 1);
-	assert.match(notifications[0].message, /isn't directly compatible/);
-});
-
-test("PiModelClient fails clearly for unsupported seeder providers", async () => {
-	const unsupportedModel = {
-		api: "custom-bridge",
-		provider: "custom",
-		id: "model-1",
-		name: "model-1",
-		baseUrl: "custom-bridge",
-		reasoning: false,
-		input: ["text"],
-		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-		contextWindow: 1000,
-		maxTokens: 1000,
-	};
-	const client = new PiModelClient(createRuntimeWithModel(unsupportedModel));
-
-	await assert.rejects(
-		() =>
-			client.generateSeed({
-				reseedTrigger: { reason: "manual", changedFiles: [] },
-				previousSeed: null,
-			}),
-		/not generate a seed with provider 'custom-bridge'/,
-	);
-});
-
-test("PiModelClient still rejects empty text for seeder", async (t) => {
-	const provider = registerTestProvider({
-		content: [{ type: "text", text: "   " }],
-		usage: { input: 1, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 1, cost: { total: 0 } },
 	});
-	t.after(() => provider.unregister());
-	const client = new PiModelClient(createRuntimeWithModel(provider.model));
 
-	await assert.rejects(
-		() =>
-			client.generateSeed({
-				reseedTrigger: { reason: "manual", changedFiles: [] },
-				previousSeed: null,
-			}),
-		/Model returned empty text/,
+	await assert.rejects(() => client.generateSuggestion(suggestionContext(), settings), /400 MissingSessionID/);
+	await assert.rejects(() => client.generateSeed({ ...seedInput, settings }), /400 MissingSessionID/);
+	assert.equal(calls.length, 2);
+	assert.deepEqual(
+		errors,
+		["suggestion", "seed"].map((kind) => ({
+			event: "model.request.failed",
+			kind,
+			provider: "opencode-go",
+			model: "deepseek-v4.1-flash",
+			error: "400 MissingSessionID",
+		})),
 	);
+});
+
+test("PiModelClient rejects aborted replies even when partial text was received", async () => {
+	const aborted = { ...reply("Incomplete reply"), stopReason: "aborted", errorMessage: "Request aborted" };
+	const { client } = createClient([aborted]);
+
+	await assert.rejects(() => client.generateSuggestion(suggestionContext()), /aborted/i);
+});
+
+test("PiModelClient accepts a successful empty suggestion and rejects a successful empty seed", async () => {
+	const empty = { ...reply("   "), usage: { input: 2, output: 0, totalTokens: 2 } };
+	const { client } = createClient([empty, empty]);
+
+	const result = await client.generateSuggestion(suggestionContext());
+	assert.equal(result.text, "");
+	assert.equal(result.usage?.totalTokens, 2);
+	await assert.rejects(() => client.generateSeed(seedInput), /Model returned empty text/);
 });

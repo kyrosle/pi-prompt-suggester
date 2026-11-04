@@ -4,6 +4,12 @@
 
 ## Unreleased
 
+### Changed
+- Use Pi 1.5's model registry for seeder and suggestion requests so they use the configured provider and its authentication. Compact suggestions and seeding use separate session IDs for OpenCode Go routing.
+
+### Fixed
+- Report provider errors in the event log instead of treating failed requests as empty suggestions.
+
 ## 0.3.10 - 2026-06-02
 
 ### Changed

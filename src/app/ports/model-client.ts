@@ -11,6 +11,8 @@ export interface ModelInvocationSettings {
 
 export type SuggestionModelContext = SuggestionPromptContext | TranscriptSuggestionPromptContext;
 
+export class ModelRequestError extends Error {}
+
 export interface ModelClient {
 	generateSeed(input: {
 		reseedTrigger: ReseedTrigger;
