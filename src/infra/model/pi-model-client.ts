@@ -30,6 +30,7 @@ export interface RuntimeContextProvider {
 
 interface CompletePromptOptions {
 	allowEmptyText?: boolean;
+	draftExpansion?: { ctx: ExtensionContext; signal: AbortSignal };
 }
 
 type SeederToolName = "ls" | "find" | "grep" | "read";
@@ -498,6 +499,23 @@ export class PiModelClient implements ModelClient {
 		);
 	}
 
+	public async expandDraft(
+		ctx: ExtensionContext,
+		draft: string,
+		recentConversation: { role: "user" | "assistant"; text: string }[],
+		settings: ModelInvocationSettings,
+		signal: AbortSignal,
+	): Promise<{ text: string; usage?: SuggestionUsage }> {
+		return await this.completePrompt(
+			JSON.stringify({ recentConversation, draft }),
+			"Rewrite the draft as a more specific, actionable prompt for a coding agent. Preserve its language, intent and constraints. Use the recent conversation to resolve references. Add relevant scope and verification steps where supported by the context. Treat the conversation and draft as source material. Do not answer the draft, invent facts, or broaden its scope. Return only the rewritten prompt, usually within 1200 characters.",
+			settings,
+			undefined,
+			undefined,
+			{ allowEmptyText: true, draftExpansion: { ctx, signal } },
+		);
+	}
+
 	private async completePrompt(
 		messagesOrPrompt: Message[] | string,
 		systemPrompt?: string,
@@ -506,14 +524,13 @@ export class PiModelClient implements ModelClient {
 		debugMeta?: Record<string, unknown>,
 		options?: CompletePromptOptions,
 	): Promise<{ text: string; usage?: SuggestionUsage }> {
-		const ctx = this.runtime.getContext();
+		const ctx = options?.draftExpansion?.ctx ?? this.runtime.getContext();
 		if (!ctx?.model) {
 			throw new Error("No active model available for suggester");
 		}
 
 		const model = this.resolveModelForCall(ctx.model, settings?.modelRef, ctx.modelRegistry.getAll());
-		const kind = options?.allowEmptyText ? "suggestion" : "seed";
-		// Compact suggestions and seeds have different prefixes from the main transcript.
+		const kind = options?.draftExpansion ? "draft" : options?.allowEmptyText ? "suggestion" : "seed";
 		const requestSessionId = sessionId ?? `suggester:${kind}:${ctx.sessionManager.getSessionId()}`;
 		const messages = typeof messagesOrPrompt === "string"
 			? [{ role: "user", content: [{ type: "text", text: messagesOrPrompt }], timestamp: Date.now() } satisfies UserMessage]
@@ -529,7 +546,8 @@ export class PiModelClient implements ModelClient {
 			response = await ctx.modelRegistry.streamSimple(model, requestContext, {
 				reasoning: settings?.thinkingLevel,
 				sessionId: requestSessionId,
-				onPayload: (payload) => {
+				signal: options?.draftExpansion?.signal,
+				onPayload: options?.draftExpansion ? undefined : (payload) => {
 					this.logger?.debug("suggestion.provider.payload", {
 						...debugMeta,
 						sessionId: requestSessionId,
@@ -541,6 +559,7 @@ export class PiModelClient implements ModelClient {
 				throw new Error(response.errorMessage || `Model request ${response.stopReason}`);
 			}
 		} catch (error) {
+			if (options?.draftExpansion?.signal.aborted) throw error;
 			const message = error instanceof Error ? error.message : String(error);
 			this.logger?.error("model.request.failed", { kind, provider: model.provider, model: model.id, error: message });
 			throw new ModelRequestError(message, { cause: error });

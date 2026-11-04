@@ -8,6 +8,7 @@ import { isStaleExtensionContextError } from "./stale-context.js";
 import type { UiContextLike } from "./ui-context.js";
 
 export const WIDGET_ACCEPT_SHORTCUT_LABEL = "F2 accepts";
+const DRAFT_PREVIEW_LINES = 8;
 
 function formatUsage(
 	usage: { suggester: SuggestionUsageStats; seeder: SuggestionUsageStats },
@@ -49,9 +50,12 @@ function refreshSuggesterUiForContext(ctx: ExtensionContext, runtime: UiContextL
 	ctx.ui.setStatus("suggester-usage", undefined);
 
 	const widgetMode = usesWidgetSuggestion(runtime.suggestionDisplayMode);
-	const suggestionText = widgetMode ? runtime.getSuggestion() : undefined;
-	const suggestionStatus = runtime.showPanelStatus && widgetMode ? runtime.getPanelSuggestionStatus() : undefined;
-	const suggestionHint = suggestionText ? themeHintText(widgetMode) : undefined;
+	const expansion = runtime.getDraftExpansion();
+	const suggestionText = expansion ? expansion.text : widgetMode ? runtime.getSuggestion() : undefined;
+	const suggestionStatus = expansion
+		? expansion.text ? "Expanded draft" : "Expanding draft…"
+		: runtime.showPanelStatus && widgetMode ? runtime.getPanelSuggestionStatus() : undefined;
+	const suggestionHint = suggestionText ? WIDGET_ACCEPT_SHORTCUT_LABEL : undefined;
 	const usageStatus = runtime.showUsageInPanel ? runtime.getPanelUsageStatus() : undefined;
 	const logStatus = runtime.getPanelLogStatus();
 	if (!suggestionText && !suggestionStatus && !logStatus && !usageStatus) {
@@ -66,15 +70,20 @@ function refreshSuggesterUiForContext(ctx: ExtensionContext, runtime: UiContextL
 			render(width: number): string[] {
 				const lines: string[] = [];
 				if (suggestionText) {
-					const sourceLines = suggestionText.split("\n");
+					const sourceLines = suggestionText.split("\n", expansion ? DRAFT_PREVIEW_LINES + 1 : undefined);
 					for (let index = 0; index < sourceLines.length; index += 1) {
+						if (expansion && lines.length > DRAFT_PREVIEW_LINES) break;
 						const prefix = index === 0 ? "✦ " : "  ";
 						const wrapped = wrapTextWithAnsi(theme.fg("accent", `${prefix}${sourceLines[index] ?? ""}`), Math.max(10, width));
 						for (const wrappedLine of wrapped.length > 0 ? wrapped : [theme.fg("accent", prefix.trimEnd())]) {
 							const truncated = truncateToWidth(wrappedLine, Math.max(10, width), "", true);
 							const pad = " ".repeat(Math.max(0, width - visibleWidth(truncated)));
 							lines.push(truncated + pad);
+							if (expansion && lines.length > DRAFT_PREVIEW_LINES) break;
 						}
+					}
+					if (expansion && lines.length > DRAFT_PREVIEW_LINES) {
+						lines[DRAFT_PREVIEW_LINES] = truncateToWidth(theme.fg("muted", "… F2 inserts the full draft"), width);
 					}
 				}
 				const parts: string[] = [];
@@ -99,17 +108,23 @@ function refreshSuggesterUiForContext(ctx: ExtensionContext, runtime: UiContextL
 	);
 }
 
-function themeHintText(widgetMode: boolean): string | undefined {
-	return widgetMode ? WIDGET_ACCEPT_SHORTCUT_LABEL : undefined;
-}
-
 export function acceptWidgetSuggestion(runtime: UiContextLike): "accepted" | "missing-suggestion" | "mismatch" | "unavailable" {
 	const ctx = runtime.getContext();
-	if (!ctx?.hasUI || !usesWidgetSuggestion(runtime.suggestionDisplayMode)) return "unavailable";
-	const suggestion = runtime.getSuggestion();
+	if (!ctx?.hasUI) return "unavailable";
+	const expansion = runtime.getDraftExpansion();
+	if (!expansion && !usesWidgetSuggestion(runtime.suggestionDisplayMode)) return "unavailable";
+	const suggestion = expansion ? expansion.text : runtime.getSuggestion();
 	if (!suggestion) return "missing-suggestion";
 	const editorText = ctx.ui.getEditorText();
-	if (editorText.length > 0 && !suggestion.startsWith(editorText)) return "mismatch";
+	if (expansion) {
+		runtime.clearDraftExpansion();
+		if (editorText !== expansion.draft) {
+			refreshSuggesterUi(runtime);
+			return "mismatch";
+		}
+	} else if (editorText.length > 0 && !suggestion.startsWith(editorText)) {
+		return "mismatch";
+	}
 	ctx.ui.setEditorText(suggestion);
 	runtime.setSuggestion(undefined);
 	runtime.setPanelSuggestionStatus(undefined);

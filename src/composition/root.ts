@@ -35,6 +35,7 @@ export interface AppComposition {
 		variantStore: SuggesterVariantStore;
 	};
 	eventLog: NdjsonEventLog;
+	modelClient: PiModelClient;
 	paths: ReturnType<typeof getSuggesterStoragePaths>;
 	orchestrators: {
 		sessionStart: SessionStartOrchestrator;
@@ -150,6 +151,7 @@ export async function createAppComposition(pi: ExtensionAPI, cwd: string = proce
 			variantStore,
 		},
 		eventLog,
+		modelClient,
 		paths,
 		orchestrators: {
 			sessionStart,

@@ -73,6 +73,10 @@ This is the main UI for normal users. It lets you:
 - by default, press `Space` on an empty editor to accept the full suggestion
 - you can change the ghost accept key in `/suggesterSettings` or via `suggestion.ghostAcceptKeys`
 
+### Expand a draft
+
+While Pi is idle, type a draft and press `F3`. The configured suggester model uses your draft and recent conversation to generate a more detailed prompt in the widget below the editor. Press `F3` again to regenerate after the result appears. Press `F2` to put the expanded prompt in the editor while the original draft is still unchanged. Review it and press Enter when you want to submit it.
+
 ### Common commands
 
 - `/suggesterSettings` — main settings UI

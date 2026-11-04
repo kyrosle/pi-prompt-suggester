@@ -1,5 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { RuntimeRef } from "../../../dist/infra/pi/runtime-ref.js";
+import { createUiContext } from "../../../dist/infra/pi/ui-context.js";
 import {
 	acceptWidgetSuggestion,
 	PiSuggestionSink,
@@ -15,8 +17,87 @@ function createTheme() {
 	};
 }
 
+test("F2 accepts a full draft rewrite only while the original draft is unchanged", async () => {
+	const ref = new RuntimeRef();
+	let editorText = "check this";
+	let widget;
+	ref.setContext({
+		hasUI: true,
+		ui: {
+			getEditorText: () => editorText,
+			setEditorText: (value) => { editorText = value; },
+			setWidget: (_key, factory) => { widget = factory?.(null, createTheme()); },
+			setStatus() {},
+		},
+	});
+	const runtime = createUiContext({
+		runtimeRef: ref,
+		config: { suggestion: { displayMode: "widget", showPanelStatus: true } },
+		getSessionThinkingLevel: () => "off",
+	});
+	const startExpansion = () => {
+		const expansion = { draft: "check this", controller: new AbortController() };
+		ref.setDraftExpansion(expansion);
+		return expansion;
+	};
+
+	const expansion = startExpansion();
+	await new PiSuggestionSink(runtime).showSuggestion("check this automatic suggestion");
+	assert.match(widget.render(80).join("\n"), /Expanding draft/);
+	assert.equal(acceptWidgetSuggestion(runtime), "missing-suggestion");
+
+	expansion.text = "Review the rebase and run the affected regression tests.";
+	refreshSuggesterUi(runtime);
+	assert.match(widget.render(80).join("\n"), /Review the rebase/);
+	assert.equal(acceptWidgetSuggestion(runtime), "accepted");
+	assert.equal(editorText, expansion.text);
+	assert.equal(ref.getDraftExpansion(), undefined);
+
+	const stale = startExpansion();
+	stale.text = "A stale rewrite.";
+	editorText = "";
+	assert.equal(acceptWidgetSuggestion(runtime), "mismatch");
+	assert.equal(editorText, "");
+	assert.equal(ref.getDraftExpansion(), undefined);
+
+	const pending = startExpansion();
+	ref.bumpEpoch();
+	assert.equal(pending.controller.signal.aborted, true);
+	assert.equal(ref.getDraftExpansion(), undefined);
+});
+
+test("an expanded draft has a bounded widget preview and can be inserted in full", () => {
+	const ref = new RuntimeRef();
+	let editorText = "check this";
+	let widget;
+	ref.setContext({
+		hasUI: true,
+		ui: {
+			getEditorText: () => editorText,
+			setEditorText: (value) => { editorText = value; },
+			setWidget: (_key, factory) => { widget = factory?.(null, createTheme()); },
+			setStatus() {},
+		},
+	});
+	const runtime = createUiContext({
+		runtimeRef: ref,
+		config: { suggestion: { displayMode: "ghost" } },
+		getSessionThinkingLevel: () => "off",
+	});
+	const text = Array.from({ length: 20 }, (_, i) => `Step ${i + 1}`).join("\n");
+	ref.setDraftExpansion({ draft: editorText, text, controller: new AbortController() });
+	refreshSuggesterUi(runtime);
+	const lines = widget.render(80).join("\n");
+	assert.match(lines, /Step 8/);
+	assert.match(lines, /F2 inserts the full draft/);
+	assert.doesNotMatch(lines, /Step 20/);
+	assert.equal(acceptWidgetSuggestion(runtime), "accepted");
+	assert.equal(editorText, text);
+});
+
 test("PiSuggestionSink keeps ghost suggestions even before idle flips", async () => {
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		epoch: 1,
 		suggestion: undefined,
 		panelSuggestionStatus: undefined,
@@ -83,6 +164,7 @@ test("PiSuggestionSink keeps ghost suggestions even before idle flips", async ()
 
 test("PiSuggestionSink retains suggestions even when the editor text is temporarily incompatible", async () => {
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		epoch: 1,
 		suggestion: undefined,
 		panelSuggestionStatus: undefined,
@@ -166,6 +248,7 @@ test("refreshSuggesterUi still renders the panel when a suggestion exists", () =
 		},
 	};
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		getContext() {
 			return ctx;
 		},
@@ -210,6 +293,7 @@ test("refreshSuggesterUi hides widget suggestion content after switching back to
 		},
 	};
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		suggestionDisplayMode: "widget",
 		getContext() {
 			return ctx;
@@ -243,6 +327,7 @@ test("refreshSuggesterUi hides widget suggestion content after switching back to
 
 test("acceptWidgetSuggestion materializes the suggestion into the default editor", () => {
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		suggestion: "hello world",
 		panelSuggestionStatus: "prompt suggestion",
 		editorText: "hello",
@@ -297,6 +382,7 @@ test("acceptWidgetSuggestion materializes the suggestion into the default editor
 
 test("acceptWidgetSuggestion refuses to overwrite diverged editor text", () => {
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		suggestion: "hello world",
 		editorText: "different prompt",
 		getContext() {
@@ -348,6 +434,7 @@ test("acceptWidgetSuggestion refuses to overwrite diverged editor text", () => {
 test("PiSuggestionSink writes usage into the panel instead of the footer status line", async () => {
 	const statusCalls = [];
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		epoch: 1,
 		panelUsageStatus: undefined,
 		getContext() {
@@ -415,6 +502,7 @@ test("refreshSuggesterUi shows orphan usage when usage display is enabled", () =
 		},
 	};
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		getContext() {
 			return ctx;
 		},
@@ -445,6 +533,7 @@ test("refreshSuggesterUi shows orphan usage when usage display is enabled", () =
 
 test("PiSuggestionSink shows widget suggestions when widget mode is enabled", async () => {
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		epoch: 1,
 		suggestion: undefined,
 		panelSuggestionStatus: undefined,
@@ -515,6 +604,7 @@ test("refreshSuggesterUi hides orphan usage when usage display is disabled", () 
 		},
 	};
 	const runtime = {
+		getDraftExpansion: () => undefined,
 		getContext() {
 			return ctx;
 		},

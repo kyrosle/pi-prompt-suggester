@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { PromptSuggesterConfig } from "../../config/types.js";
 import type { SuggesterVariantStore } from "./suggester-variant-store.js";
 import { getConfiguredModelDisplay } from "./display.js";
-import type { RuntimeRef } from "./runtime-ref.js";
+import type { DraftExpansion, RuntimeRef } from "./runtime-ref.js";
 
 export interface WidgetLogStatus {
 	level: "debug" | "info" | "warn" | "error";
@@ -14,6 +14,8 @@ export interface UiContextLike {
 	getEpoch(): number;
 	getSuggestion(): string | undefined;
 	setSuggestion(text: string | undefined): void;
+	getDraftExpansion(): DraftExpansion | undefined;
+	clearDraftExpansion(): void;
 	getPanelSuggestionStatus(): string | undefined;
 	setPanelSuggestionStatus(text: string | undefined): void;
 	getPanelUsageStatus(): string | undefined;
@@ -40,6 +42,8 @@ export function createUiContext(params: {
 		getEpoch: () => runtimeRef.getEpoch(),
 		getSuggestion: () => runtimeRef.getSuggestion(),
 		setSuggestion: (text) => runtimeRef.setSuggestion(text),
+		getDraftExpansion: () => runtimeRef.getDraftExpansion(),
+		clearDraftExpansion: () => runtimeRef.setDraftExpansion(undefined),
 		getPanelSuggestionStatus: () => runtimeRef.getPanelSuggestionStatus(),
 		setPanelSuggestionStatus: (text) => runtimeRef.setPanelSuggestionStatus(text),
 		getPanelUsageStatus: () => runtimeRef.getPanelUsageStatus(),

@@ -133,6 +133,35 @@ test("PiModelClient preserves the transcript session ID and messages", async () 
 	assert.equal(calls[0].context.messages.length, 2);
 });
 
+test("PiModelClient expands the supplied draft through its session registry without logging the prompt", async () => {
+	const controller = new AbortController();
+	const client = new PiModelClient({ getContext: () => assert.fail("Draft must use the shortcut context") });
+	const ctx = {
+		model: activeModel,
+		sessionManager: { getSessionId: () => "pi-session" },
+		modelRegistry: {
+			getAll: () => [activeModel],
+			streamSimple(model, context, options) {
+				assert.equal(model, activeModel);
+				assert.equal(options.sessionId, "suggester:draft:pi-session");
+				assert.equal(options.signal, controller.signal);
+				assert.equal(options.onPayload, undefined);
+				assert.match(context.systemPrompt, /Preserve its language, intent and constraints/);
+				assert.deepEqual(JSON.parse(context.messages[0].content[0].text), {
+					draft: "检查这次 rebase",
+					recentConversation: [{ role: "assistant", text: "The rebase is complete." }],
+				});
+				return { result: async () => reply("检查 rebase 的冲突解决并运行相关测试。") };
+			},
+		},
+	};
+
+	const result = await client.expandDraft(ctx, "检查这次 rebase", [
+		{ role: "assistant", text: "The rebase is complete." },
+	], {}, controller.signal);
+	assert.equal(result.text, "检查 rebase 的冲突解决并运行相关测试。");
+});
+
 test("PiModelClient rejects provider errors instead of returning an empty suggestion or seed", async () => {
 	const failed = { stopReason: "error", errorMessage: "400 MissingSessionID", content: [] };
 	const model = { api: "openai-completions", provider: "opencode-go", id: "deepseek-v4.1-flash" };

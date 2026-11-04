@@ -6,10 +6,17 @@ export interface EditorHistoryState {
 	index: number;
 }
 
+export interface DraftExpansion {
+	draft: string;
+	controller: AbortController;
+	text?: string;
+}
+
 export class RuntimeRef {
 	private currentContext: ExtensionContext | undefined;
 	private generationEpoch = 0;
 	private currentSuggestion: string | undefined;
+	private draftExpansion: DraftExpansion | undefined;
 	private suggestionRevision = 0;
 	private lastTurnContext: TurnContext | undefined;
 	private lastBootstrappedLeafId: string | undefined;
@@ -33,6 +40,7 @@ export class RuntimeRef {
 	}
 
 	public bumpEpoch(): number {
+		this.setDraftExpansion(undefined);
 		this.generationEpoch += 1;
 		return this.generationEpoch;
 	}
@@ -52,6 +60,15 @@ export class RuntimeRef {
 
 	public getSuggestionRevision(): number {
 		return this.suggestionRevision;
+	}
+
+	public getDraftExpansion(): DraftExpansion | undefined {
+		return this.draftExpansion;
+	}
+
+	public setDraftExpansion(expansion: DraftExpansion | undefined): void {
+		this.draftExpansion?.controller.abort();
+		this.draftExpansion = expansion;
 	}
 
 	public setLastTurnContext(turn: TurnContext | undefined): void {

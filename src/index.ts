@@ -1,6 +1,8 @@
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
 import { createAppComposition, type AppComposition } from "./composition/root.js";
-import { buildLatestHistoricalTurnContext } from "./app/services/conversation-signals.js";
+import { buildLatestHistoricalTurnContext, extractUserText } from "./app/services/conversation-signals.js";
+import { toInvocationThinkingLevel } from "./config/inference.js";
 import { PiExtensionAdapter } from "./infra/pi/extension-adapter.js";
 import { GhostSuggestionEditor } from "./infra/pi/ghost-suggestion-editor.js";
 import { getGhostEditorSyncAction, type GhostEditorInstallState } from "./infra/pi/ghost-editor-installation.js";
@@ -17,6 +19,7 @@ import {
 } from "./infra/pi/command-handlers.js";
 import { acceptWidgetSuggestion, refreshSuggesterUi } from "./infra/pi/ui-adapter.js";
 import { createUiContext, type UiContextLike } from "./infra/pi/ui-context.js";
+import type { DraftExpansion } from "./infra/pi/runtime-ref.js";
 
 export default function suggester(pi: ExtensionAPI) {
 	let compositionPromise: Promise<AppComposition> | undefined;
@@ -98,6 +101,76 @@ export default function suggester(pi: ExtensionAPI) {
 		},
 	});
 
+	pi.registerShortcut("f3", {
+		description: "Expand the current draft",
+		handler: async (ctx) => {
+			if (!ctx.hasUI) return;
+			const draft = ctx.ui.getEditorText();
+			if (!draft.trim()) {
+				ctx.ui.notify("Type a draft before pressing F3.", "info");
+				return;
+			}
+			if (!ctx.isIdle() || ctx.hasPendingMessages()) {
+				ctx.ui.notify("Wait for Pi to finish before expanding the draft.", "info");
+				return;
+			}
+
+			const sessionId = ctx.sessionManager.getSessionId();
+			const leafId = ctx.sessionManager.getLeafId();
+			const composition = await getComposition();
+			const { runtimeRef, stores } = composition;
+			const isCurrentBranch = () => {
+				const session = runtimeRef.getContext()?.sessionManager;
+				return session?.getSessionId() === sessionId && session.getLeafId() === leafId;
+			};
+			if (!isCurrentBranch() || ctx.ui.getEditorText() !== draft || !ctx.isIdle() || ctx.hasPendingMessages()) return;
+			const previous = runtimeRef.getDraftExpansion();
+			if (previous?.draft === draft && previous.text === undefined) return;
+
+			const recentConversation: { role: "user" | "assistant"; text: string }[] = [];
+			const branch = ctx.sessionManager.getBranch();
+			for (let index = branch.length - 1; index >= 0 && recentConversation.length < 4; index -= 1) {
+				const entry = branch[index];
+				if (entry.type !== "message") continue;
+				const { message } = entry;
+				if (message.role !== "user" && message.role !== "assistant") continue;
+				const text = extractUserText(message).slice(0, 1500);
+				if (text) recentConversation.unshift({ role: message.role, text });
+			}
+			const { inference } = stores.variantStore.getEffectiveConfig(composition.config);
+			const expansion: DraftExpansion = { draft, controller: new AbortController() };
+			runtimeRef.setDraftExpansion(expansion);
+			const ui = getUiContext(composition);
+			refreshSuggesterUi(ui);
+
+			try {
+				const result = await composition.modelClient.expandDraft(ctx, draft, recentConversation, {
+					modelRef: inference.suggesterModel === "session-default" ? undefined : inference.suggesterModel,
+					thinkingLevel: toInvocationThinkingLevel(inference.suggesterThinking),
+				}, expansion.controller.signal);
+				if (expansion.controller.signal.aborted || !isCurrentBranch()) return;
+				if (result.usage) await stores.stateStore.recordUsage("suggester", result.usage);
+				if (expansion.controller.signal.aborted || !isCurrentBranch()) return;
+				if (ctx.ui.getEditorText() !== draft || !ctx.isIdle() || ctx.hasPendingMessages()) return;
+				expansion.text = stripVTControlCharacters(result.text)
+					.replace(/\r\n?/g, "\n")
+					.replace(/\p{Cc}/gu, (char) => char === "\n" || char === "\t" ? char : "")
+					.trim() || undefined;
+				if (!expansion.text) ctx.ui.notify("The model returned an empty draft expansion.", "warning");
+			} catch (error) {
+				if (!expansion.controller.signal.aborted && isCurrentBranch() && ctx.ui.getEditorText() === draft) {
+					const message = stripVTControlCharacters(error instanceof Error ? error.message : String(error));
+					ctx.ui.notify(`Draft expansion failed. ${message}`, "error");
+				}
+			} finally {
+				if (runtimeRef.getDraftExpansion() === expansion) {
+					if (!expansion.text) runtimeRef.setDraftExpansion(undefined);
+					refreshSuggesterUi(ui);
+				}
+			}
+		},
+	});
+
 	const adapter = new PiExtensionAdapter(pi, {
 		onSessionStart: async (ctx) => {
 			const composition = await setRuntimeContext(ctx);
@@ -129,20 +202,21 @@ export default function suggester(pi: ExtensionAPI) {
 		onSessionShutdown: async (ctx) => {
 			const composition = await getComposition();
 			composition.orchestrators.reseedRunner.cancelPending();
+			composition.runtimeRef.setDraftExpansion(undefined);
 			composition.runtimeRef.clearContext(ctx);
 		},
 		onAgentEnd: async (turn, ctx) => {
 			if (!turn) return;
 			const composition = await setRuntimeContext(ctx);
-			syncSuggestionUi(ctx, composition);
 			composition.runtimeRef.setLastTurnContext(turn);
 			const generationId = composition.runtimeRef.bumpEpoch();
+			syncSuggestionUi(ctx, composition);
 			await composition.orchestrators.agentEnd.handle(turn, generationId);
 		},
 		onUserSubmit: async (event: InputEvent, ctx) => {
 			const composition = await setRuntimeContext(ctx);
-			syncSuggestionUi(ctx, composition);
 			composition.runtimeRef.bumpEpoch();
+			syncSuggestionUi(ctx, composition);
 			await composition.orchestrators.userSubmit.handle({
 				turnId: ctx.sessionManager.getLeafId() ?? `input-${Date.now()}`,
 				userPrompt: event.text,
