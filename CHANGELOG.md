@@ -9,6 +9,7 @@
 
 ### Fixed
 - Report provider errors in the event log instead of treating failed requests as empty suggestions.
+- Load the TypeScript extension entry directly so Git installs work without a prebuilt `dist` directory.
 
 ## 0.3.10 - 2026-06-02
 
