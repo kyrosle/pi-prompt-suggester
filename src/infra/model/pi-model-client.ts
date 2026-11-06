@@ -561,7 +561,10 @@ export class PiModelClient implements ModelClient {
 		} catch (error) {
 			if (options?.draftExpansion?.signal.aborted) throw error;
 			const message = error instanceof Error ? error.message : String(error);
-			this.logger?.error("model.request.failed", { kind, provider: model.provider, model: model.id, error: message });
+			this.logger?.error("model.request.failed", {
+				kind, provider: model.provider, model: model.id, error: message,
+				stack: error instanceof Error ? error.stack : undefined,
+			});
 			throw new ModelRequestError(message, { cause: error });
 		}
 

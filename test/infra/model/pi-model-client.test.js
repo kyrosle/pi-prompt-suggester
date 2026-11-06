@@ -145,6 +145,7 @@ test("PiModelClient expands the supplied draft through its session registry with
 				assert.equal(model, activeModel);
 				assert.equal(options.sessionId, "suggester:draft:pi-session");
 				assert.equal(options.signal, controller.signal);
+				assert.equal(options.reasoning, "max");
 				assert.equal(options.onPayload, undefined);
 				assert.match(context.systemPrompt, /Preserve its language, intent and constraints/);
 				assert.deepEqual(JSON.parse(context.messages[0].content[0].text), {
@@ -158,7 +159,7 @@ test("PiModelClient expands the supplied draft through its session registry with
 
 	const result = await client.expandDraft(ctx, "检查这次 rebase", [
 		{ role: "assistant", text: "The rebase is complete." },
-	], {}, controller.signal);
+	], { thinkingLevel: "max" }, controller.signal);
 	assert.equal(result.text, "检查 rebase 的冲突解决并运行相关测试。");
 });
 
@@ -182,8 +183,9 @@ test("PiModelClient rejects provider errors instead of returning an empty sugges
 	await assert.rejects(() => client.generateSuggestion(suggestionContext(), settings), /400 MissingSessionID/);
 	await assert.rejects(() => client.generateSeed({ ...seedInput, settings }), /400 MissingSessionID/);
 	assert.equal(calls.length, 2);
+	assert.ok(errors.every(({ stack }) => stack.includes("400 MissingSessionID")));
 	assert.deepEqual(
-		errors,
+		errors.map(({ stack, ...details }) => details),
 		["suggestion", "seed"].map((kind) => ({
 			event: "model.request.failed",
 			kind,

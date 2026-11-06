@@ -52,7 +52,7 @@ const DEFAULT_FILE: VariantFile = {
 };
 
 function isThinkingValue(value: unknown): value is ThinkingLevel | InferenceDefault {
-	return ["minimal", "low", "medium", "high", "xhigh", "session-default"].includes(String(value));
+	return ["minimal", "low", "medium", "high", "xhigh", "max", "session-default"].includes(String(value));
 }
 
 function isPositiveInteger(value: unknown): value is number {

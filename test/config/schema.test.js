@@ -14,6 +14,21 @@ test("validateConfig accepts shipped defaults", () => {
 	assert.equal(validateConfig(defaultConfig), true);
 });
 
+test("config normalization preserves max thinking for both helper models", () => {
+	const override = {
+		schemaVersion: defaultConfig.schemaVersion,
+		inference: {
+			seederThinking: "max",
+			suggesterThinking: "max",
+		},
+	};
+	assert.deepEqual(normalizeOverrideConfig(override, defaultConfig), { config: override, changed: false });
+	assert.equal(validateConfig({
+		...defaultConfig,
+		inference: { ...defaultConfig.inference, ...override.inference },
+	}), true);
+});
+
 test("validateConfig rejects unknown keys and invalid values", () => {
 	assert.equal(validateConfig({ ...defaultConfig, extra: true }), false);
 	assert.equal(

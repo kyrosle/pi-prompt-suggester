@@ -8,6 +8,7 @@ import { manageVariantsUi, runAbTestingUi, showAbStats } from "./ab-testing.js";
 import { showModelSelector } from "./model-selector.js";
 import { formatGhostAcceptKeys } from "../ghost-accept-keys.js";
 import { isSuggestionDisplayMode, usesGhostEditor } from "../suggestion-display-mode.js";
+import { isStaleExtensionContextError } from "../stale-context.js";
 
 export async function handleSettingsUiCommand(
 	ctx: ExtensionCommandContext,
@@ -673,7 +674,11 @@ export async function handleSettingsUiCommand(
 				continue;
 			}
 		} catch (error) {
-			ctx.ui.notify((error as Error).message, "error");
+			if (isStaleExtensionContextError(error) || !ctx.hasUI) return;
+			composition.logger.error("settings.failed", {
+				error: error instanceof Error ? error.message : String(error),
+				stack: error instanceof Error ? error.stack : undefined,
+			});
 		}
 	}
 }

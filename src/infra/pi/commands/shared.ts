@@ -5,7 +5,7 @@ import type { ThinkingLevel } from "../../../config/types.js";
 export type ModelRole = "seeder" | "suggester";
 export type ConfigScope = "project" | "user";
 
-export const THINKING_LEVELS: ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh"];
+export const THINKING_LEVELS: ThinkingLevel[] = ["minimal", "low", "medium", "high", "xhigh", "max"];
 export const MODEL_ROLES: ModelRole[] = ["seeder", "suggester"];
 export const SESSION_DEFAULT = "session-default";
 

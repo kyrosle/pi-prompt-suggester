@@ -78,21 +78,30 @@ export class PiExtensionAdapter {
 	public constructor(
 		private readonly pi: ExtensionAPI,
 		private readonly wiring: ExtensionWiring,
+		private readonly reportError: (error: unknown, ctx: ExtensionContext) => Promise<void>,
 	) {}
+
+	public async runSafely(ctx: ExtensionContext, operation: () => Promise<void>): Promise<void> {
+		try {
+			await ignoreStaleExtensionContextAsync(operation);
+		} catch (error) {
+			await ignoreStaleExtensionContextAsync(() => this.reportError(error, ctx));
+		}
+	}
 
 	public register(): void {
 		this.pi.on("session_start", async (_event: SessionStartEvent, ctx) => {
-			await ignoreStaleExtensionContextAsync(() => handleSessionEvent(ctx, this.wiring.onSessionStart));
+			await this.runSafely(ctx, () => handleSessionEvent(ctx, this.wiring.onSessionStart));
 		});
 		this.pi.on("session_tree", async (_event: SessionTreeEvent, ctx) => {
-			await ignoreStaleExtensionContextAsync(() => handleSessionEvent(ctx, this.wiring.onSessionStart));
+			await this.runSafely(ctx, () => handleSessionEvent(ctx, this.wiring.onSessionStart));
 		});
 		this.pi.on("session_shutdown", async (_event, ctx) => {
-			await ignoreStaleExtensionContextAsync(() => this.wiring.onSessionShutdown(ctx));
+			await this.runSafely(ctx, () => this.wiring.onSessionShutdown(ctx));
 		});
 
 		this.pi.on("agent_end", async (event: AgentEndEvent, ctx) => {
-			await ignoreStaleExtensionContextAsync(async () => {
+			await this.runSafely(ctx, async () => {
 				const branchEntries = ctx.sessionManager.getBranch();
 				const branchMessages = branchEntries
 					.filter((entry): entry is typeof branchEntries[number] & { type: "message" } => entry.type === "message")
@@ -117,21 +126,21 @@ export class PiExtensionAdapter {
 		});
 
 		this.pi.on("input", async (event: InputEvent, ctx) => {
-			await ignoreStaleExtensionContextAsync(() => this.wiring.onUserSubmit(event, ctx));
+			await this.runSafely(ctx, () => this.wiring.onUserSubmit(event, ctx));
 			return { action: "continue" };
 		});
 
 		this.pi.registerCommand("suggesterSettings", {
 			description: "Interactive suggester settings menu",
 			handler: async (_args, ctx) => {
-				await this.wiring.onSettingsUiCommand(ctx);
+				await this.runSafely(ctx, () => this.wiring.onSettingsUiCommand(ctx));
 			},
 		});
 
 		this.pi.registerCommand("suggester", {
 			description:
 				"suggester controls: status | reseed | model | thinking | instruction | variant | ab | config | seed-trace [limit]",
-			handler: async (args, ctx) => {
+			handler: async (args, ctx) => this.runSafely(ctx, async () => {
 				const trimmed = args.trim();
 				const [subcommand, ...rest] = trimmed.length > 0 ? trimmed.split(/\s+/) : ["status"];
 				if (subcommand === "reseed") {
@@ -167,7 +176,7 @@ export class PiExtensionAdapter {
 					return;
 				}
 				await this.wiring.onStatusCommand(ctx);
-			},
+			}),
 		});
 	}
 }

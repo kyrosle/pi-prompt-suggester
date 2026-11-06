@@ -111,20 +111,8 @@ export async function handleConfigCommand(
 		}
 
 		const rawValue = tokens.slice(index + 1).join(" ");
-		let parsedValue: unknown;
-		try {
-			parsedValue = parseConfigValue(rawValue);
-		} catch (error) {
-			ctx.ui.notify((error as Error).message, "error");
-			return;
-		}
-
-		try {
-			await persistence.writeValue(scope, configPath, parsedValue);
-		} catch (error) {
-			ctx.ui.notify((error as Error).message, "error");
-			return;
-		}
+		const parsedValue = parseConfigValue(rawValue);
+		await persistence.writeValue(scope, configPath, parsedValue);
 
 		ctx.ui.notify(
 			`suggester config updated (${scope}): ${configPath}=${JSON.stringify(parsedValue)}`,
@@ -156,13 +144,7 @@ export async function handleConfigCommand(
 		return;
 	}
 
-	let removed: string[];
-	try {
-		removed = await persistence.resetScopes([...targets]);
-	} catch (error) {
-		ctx.ui.notify((error as Error).message, "error");
-		return;
-	}
+	const removed = await persistence.resetScopes([...targets]);
 
 	ctx.ui.notify(
 		[

@@ -99,6 +99,18 @@ test("variant store normalizes invalid files and preserves default variant", asy
 	assert.deepEqual(store.getVariant("custom"), {});
 });
 
+test("variant store preserves max thinking after reloading", async () => {
+	const dir = await mkdtemp(path.join(os.tmpdir(), "pi-suggester-variants-"));
+	const storageDir = path.join(dir, "storage");
+	const store = new SuggesterVariantStore(dir, storageDir);
+	await store.init();
+	await store.updateVariant("default", { suggesterThinking: "max" });
+
+	const reloaded = new SuggesterVariantStore(dir, storageDir);
+	await reloaded.init();
+	assert.equal(reloaded.getEffectiveConfig(baseConfig).inference.suggesterThinking, "max");
+});
+
 test("variant stats aggregate wins, ties, and both-bad outcomes", async () => {
 	const dir = await mkdtemp(path.join(os.tmpdir(), "pi-suggester-variants-"));
 	const store = new SuggesterVariantStore(dir, path.join(dir, "storage"));

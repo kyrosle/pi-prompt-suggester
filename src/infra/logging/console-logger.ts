@@ -1,3 +1,4 @@
+import { stripVTControlCharacters } from "node:util";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { EventLog } from "../../app/ports/event-log.js";
 import type { Logger } from "../../app/ports/logger.js";
@@ -67,7 +68,10 @@ export class ConsoleLogger implements Logger {
 		if (LEVEL_ORDER[level] < LEVEL_ORDER[this.level]) return;
 		const payload = meta && Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : "";
 		const line = truncate(`[suggester ${level}] ${message}${payload}`, 220);
-		const statusLine = truncate(`[suggester ${level}] ${message}`, 120);
+		const errorSummary = typeof meta?.error === "string"
+			? stripVTControlCharacters(meta.error).split(/[\r\n]/, 1)[0].replace(/[\p{Cc}\p{Zl}\p{Zp}]/gu, " ").trim()
+			: "";
+		const statusLine = truncate(`[suggester ${level}] ${message}${errorSummary ? ` · ${errorSummary}` : ""}`, 120);
 		try {
 			const ctx = this.options.getContext?.();
 			this.options.setWidgetLogStatus?.(level === "warn" || level === "error" ? { level, text: statusLine } : undefined);

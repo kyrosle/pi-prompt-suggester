@@ -1,4 +1,4 @@
-export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh";
+export type ThinkingLevel = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export type InferenceDefault = "session-default";
 export type SuggestionStrategy = "compact" | "transcript-steering";
 export type SuggestionDisplayMode = "ghost" | "widget";

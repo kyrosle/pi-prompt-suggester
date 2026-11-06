@@ -96,7 +96,7 @@ export async function handleThinkingCommand(
 	const role = parseRole(tokens[0]);
 	if (!role) {
 		ctx.ui.notify(
-			"Usage: /suggester thinking [show] | [set] <seeder|suggester> <minimal|low|medium|high|xhigh|session-default> | clear <seeder|suggester>",
+			"Usage: /suggester thinking [show] | [set] <seeder|suggester> <minimal|low|medium|high|xhigh|max|session-default> | clear <seeder|suggester>",
 			"error",
 		);
 		return;
@@ -110,7 +110,7 @@ export async function handleThinkingCommand(
 
 	const rawLevel = tokens[1]?.trim().toLowerCase();
 	if (!rawLevel || ![...THINKING_LEVELS, SESSION_DEFAULT].includes(rawLevel as ThinkingLevel | typeof SESSION_DEFAULT)) {
-		ctx.ui.notify("Thinking level must be one of: minimal, low, medium, high, xhigh, session-default", "error");
+		ctx.ui.notify("Thinking level must be one of: minimal, low, medium, high, xhigh, max, session-default", "error");
 		return;
 	}
 

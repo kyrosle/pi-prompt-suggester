@@ -79,3 +79,18 @@ test("ConsoleLogger ignores stale footer status writes during session teardown",
 		/stale after session replacement/,
 	);
 });
+
+test("ConsoleLogger keeps error details in the log and renders only a sanitized first line", () => {
+	const events = [];
+	let status;
+	const error = "429: \u001b[31mupstream overloaded\u001b[0m\nprivate detail\n    at fixture.js:12";
+	const logger = new ConsoleLogger("info", {
+		mirrorToConsoleWhenNoUi: false,
+		eventLog: { append: async (entry) => { events.push(entry); } },
+		setWidgetLogStatus: (value) => { status = value; },
+	});
+	logger.error("operation.failed", { error, stack: "Full fixture stack" });
+	assert.deepEqual(status, { level: "error", text: "[suggester error] operation.failed · 429: upstream overloaded" });
+	assert.equal(events[0].meta.error, error);
+	assert.equal(events[0].meta.stack, "Full fixture stack");
+});

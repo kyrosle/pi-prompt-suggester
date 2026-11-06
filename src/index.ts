@@ -1,5 +1,6 @@
 import { stripVTControlCharacters } from "node:util";
 import type { ExtensionAPI, ExtensionContext, InputEvent } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { createAppComposition, type AppComposition } from "./composition/root.js";
 import { buildLatestHistoricalTurnContext, extractUserText } from "./app/services/conversation-signals.js";
 import { toInvocationThinkingLevel } from "./config/inference.js";
@@ -20,6 +21,10 @@ import {
 import { acceptWidgetSuggestion, refreshSuggesterUi } from "./infra/pi/ui-adapter.js";
 import { createUiContext, type UiContextLike } from "./infra/pi/ui-context.js";
 import type { DraftExpansion } from "./infra/pi/runtime-ref.js";
+import { ConsoleLogger } from "./infra/logging/console-logger.js";
+import { NdjsonEventLog } from "./infra/logging/ndjson-event-log.js";
+import { getSuggesterStoragePaths } from "./infra/storage/suggester-paths.js";
+import { ignoreStaleExtensionContext } from "./infra/pi/stale-context.js";
 
 export default function suggester(pi: ExtensionAPI) {
 	let compositionPromise: Promise<AppComposition> | undefined;
@@ -90,20 +95,48 @@ export default function suggester(pi: ExtensionAPI) {
 		refreshSuggesterUi(getUiContext(composition));
 	}
 
+	async function reportError(error: unknown, ctx: ExtensionContext): Promise<void> {
+		const hasUI = ctx.hasUI;
+		const composition = await compositionPromise?.catch(() => undefined);
+		const details = {
+			error: error instanceof Error ? error.message : String(error),
+			stack: error instanceof Error ? error.stack : undefined,
+		};
+		if (composition && composition.runtimeRef.getContext()?.sessionManager.getSessionId() !== ctx.sessionManager.getSessionId()) {
+			await composition.eventLog.append({
+				at: new Date().toISOString(), level: "error", message: "operation.failed", meta: details,
+			}).catch(() => undefined);
+			return;
+		}
+		const logger = composition?.logger ?? new ConsoleLogger("error", {
+			eventLog: new NdjsonEventLog(getSuggesterStoragePaths(ctx.cwd).eventLogPath),
+			mirrorToConsoleWhenNoUi: false,
+			setWidgetLogStatus: (status) => {
+				if (hasUI && status) {
+					ctx.ui.setWidget("suggester-panel", (_tui, theme) => ({
+						render: (width) => [truncateToWidth(theme.fg("error", status.text), width)],
+						invalidate() {},
+					}), { placement: "belowEditor" });
+				}
+			},
+		});
+		ignoreStaleExtensionContext(() => logger.error("operation.failed", details));
+	}
+
 	pi.registerShortcut("f2", {
 		description: "Accept prompt suggestion",
-		handler: async (ctx) => {
+		handler: async (ctx) => adapter.runSafely(ctx, async () => {
 			const composition = await setRuntimeContext(ctx);
 			const result = acceptWidgetSuggestion(getUiContext(composition));
 			if (result === "mismatch") {
 				ctx.ui.notify("Current editor text no longer matches the suggestion.", "warning");
 			}
-		},
+		}),
 	});
 
 	pi.registerShortcut("f3", {
 		description: "Expand the current draft",
-		handler: async (ctx) => {
+		handler: async (ctx) => adapter.runSafely(ctx, async () => {
 			if (!ctx.hasUI) return;
 			const draft = ctx.ui.getEditorText();
 			if (!draft.trim()) {
@@ -159,8 +192,7 @@ export default function suggester(pi: ExtensionAPI) {
 				if (!expansion.text) ctx.ui.notify("The model returned an empty draft expansion.", "warning");
 			} catch (error) {
 				if (!expansion.controller.signal.aborted && isCurrentBranch() && ctx.ui.getEditorText() === draft) {
-					const message = stripVTControlCharacters(error instanceof Error ? error.message : String(error));
-					ctx.ui.notify(`Draft expansion failed. ${message}`, "error");
+					await reportError(error, ctx);
 				}
 			} finally {
 				if (runtimeRef.getDraftExpansion() === expansion) {
@@ -168,7 +200,7 @@ export default function suggester(pi: ExtensionAPI) {
 					refreshSuggesterUi(ui);
 				}
 			}
-		},
+		}),
 	});
 
 	const adapter = new PiExtensionAdapter(pi, {
@@ -294,7 +326,7 @@ export default function suggester(pi: ExtensionAPI) {
 			await handleSeedTraceCommand(args, pi, composition);
 			ctx.ui.notify("suggester seed trace sent to chat", "info");
 		},
-	});
+	}, reportError);
 
 	adapter.register();
 }
